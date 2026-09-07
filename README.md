@@ -1,4 +1,4 @@
-# Multi-Agent Coding: One-Page Playbook
+# Multi-Agent Coding Operating Manual: One-Page Playbook
 
 ## Plain tmux + Git Worktrees
 
