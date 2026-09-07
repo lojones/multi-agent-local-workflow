@@ -1,4 +1,143 @@
-# Multi-Agent Coding Operating Manual
+# Multi-Agent Coding: One-Page Playbook
+
+## Plain tmux + Git Worktrees
+
+**Model:** You coordinate. Git holds the shared truth. Every agent gets its own branch, directory, and tmux window.
+
+| Agent | Default role |
+|---|---|
+| **Codex** | Backend, debugging, integration, final tests |
+| **Antigravity (`agy`)** | Frontend and browser verification |
+| **Grok Build** | Investigation, alternatives, bounded implementation |
+| **Claude Code** | Architecture and independent diff review |
+
+Use only the agents a task needs. Never give two agents ownership of the same files.
+
+## 1. Define the task
+
+Create and commit `.agents/tasks/<task-id>.md` with:
+
+- goal, scope, and non-goals;
+- agent-to-directory ownership;
+- acceptance criteria and exact test commands;
+- constraints: no merge, push, deploy, `.env` edits, or out-of-scope changes.
+
+The task file and tests—not chat histories—are authoritative.
+
+## 2. Create branches and worktrees
+
+From a clean repository:
+
+```bash
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+PROJECT_NAME="$(basename "$PROJECT_ROOT")"
+TASK_ID="auth-refresh"  # change this
+WORKTREE_ROOT="$(dirname "$PROJECT_ROOT")/${PROJECT_NAME}-worktrees/${TASK_ID}"
+INTEGRATION_BRANCH="work/${TASK_ID}"
+TMUX_SESSION="${PROJECT_NAME}-${TASK_ID}"
+
+git status --short      # must be empty
+git switch main && git pull --ff-only
+git switch -c "$INTEGRATION_BRANCH"
+# Write, add, and commit .agents/tasks/$TASK_ID.md here.
+
+mkdir -p "$WORKTREE_ROOT"
+git worktree add -b "agent/${TASK_ID}/codex" "$WORKTREE_ROOT/codex" "$INTEGRATION_BRANCH"
+git worktree add -b "agent/${TASK_ID}/antigravity" "$WORKTREE_ROOT/antigravity" "$INTEGRATION_BRANCH"
+git worktree add -b "agent/${TASK_ID}/grok" "$WORKTREE_ROOT/grok" "$INTEGRATION_BRANCH"
+```
+
+Create only the worktrees required.
+
+## 3. Link `.env` explicitly
+
+Worktrees do not copy ignored files. Specify both source and destination:
+
+```bash
+PROJECT_ENV_SOURCE="/absolute/path/to/main-repository/.env"
+test -f "$PROJECT_ENV_SOURCE"
+ln -s "$PROJECT_ENV_SOURCE" "$WORKTREE_ROOT/codex/.env"
+ln -s "$PROJECT_ENV_SOURCE" "$WORKTREE_ROOT/antigravity/.env"
+ln -s "$PROJECT_ENV_SOURCE" "$WORKTREE_ROOT/grok/.env"
+readlink -f "$WORKTREE_ROOT/codex/.env"
+```
+
+All links share one target; agents must not edit it. Use development credentials only. Use separate copies when agents need different ports or values.
+
+## 4. Launch the agents
+
+```bash
+tmux new-session -d -s "$TMUX_SESSION" -n integration -c "$PROJECT_ROOT"
+tmux new-window -t "$TMUX_SESSION" -n codex -c "$WORKTREE_ROOT/codex"
+tmux new-window -t "$TMUX_SESSION" -n antigravity -c "$WORKTREE_ROOT/antigravity"
+tmux new-window -t "$TMUX_SESSION" -n grok -c "$WORKTREE_ROOT/grok"
+tmux send-keys -t "$TMUX_SESSION:codex" 'codex' Enter
+tmux send-keys -t "$TMUX_SESSION:antigravity" 'agy' Enter
+tmux send-keys -t "$TMUX_SESSION:grok" 'grok' Enter
+tmux attach -t "$TMUX_SESSION"
+```
+
+`Ctrl-b w`: windows · `Ctrl-b n/p`: next/previous · `Ctrl-b d`: detach.
+
+Give each agent this pattern:
+
+```text
+Read .agents/OPERATING_RULES.md and .agents/tasks/<task-id>.md.
+Own only <paths>. Complete the assignment, run specified tests, commit all work,
+and write .agents/handoffs/<task-id>-<agent>.md with commit SHA, files, tests,
+decisions, and risks. Do not merge, push, deploy, or edit .env.
+```
+
+## 5. Inspect, merge, and review
+
+```bash
+git diff "$INTEGRATION_BRANCH"..."agent/${TASK_ID}/codex"
+git merge --no-ff "agent/${TASK_ID}/codex"
+git diff "$INTEGRATION_BRANCH"..."agent/${TASK_ID}/antigravity"
+git merge --no-ff "agent/${TASK_ID}/antigravity"
+```
+
+Inspect every diff and test after every merge. Then create Claude’s review worktree from the integrated candidate:
+
+```bash
+git worktree add -b "review/${TASK_ID}/claude" "$WORKTREE_ROOT/claude-review" "$INTEGRATION_BRANCH"
+tmux new-window -t "$TMUX_SESSION" -n claude-review -c "$WORKTREE_ROOT/claude-review"
+tmux send-keys -t "$TMUX_SESSION:claude-review" 'claude' Enter
+```
+
+Ask Claude to review `main...HEAD` for correctness, security, API drift, missing tests, migrations, and unnecessary complexity. Address accepted blocker/high findings, then run the full test/build suite.
+
+## 6. Ship and clean up
+
+```bash
+git push -u origin "$INTEGRATION_BRANCH"
+gh pr create --base main --head "$INTEGRATION_BRANCH"
+
+# After safely pushing/merging and exiting agents:
+tmux kill-session -t "$TMUX_SESSION"
+git worktree list
+git worktree remove "$WORKTREE_ROOT/codex"
+git worktree remove "$WORKTREE_ROOT/antigravity"
+git worktree remove "$WORKTREE_ROOT/grok"
+git worktree remove "$WORKTREE_ROOT/claude-review"
+git worktree prune --dry-run --verbose
+```
+
+Never use `rm -rf` for worktrees. `git worktree remove` will refuse when uncommitted work remains; inspect it instead of forcing removal.
+
+## Seven rules
+
+1. One owner per file/directory.
+2. Requirements and acceptance tests live in Git.
+3. Agents commit and hand off; they do not merge or deploy.
+4. Inspect every diff before integration.
+5. Use a different model for review.
+6. Worktrees isolate code—not credentials, processes, ports, or databases.
+7. Start with Codex + Claude; add Antigravity and Grok when work divides cleanly.
+
+---
+
+# Multi-Agent Coding Operating Manual - Details
 
 ## Plain tmux + Git Worktrees
 
